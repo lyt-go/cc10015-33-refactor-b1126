@@ -1,10 +1,12 @@
 """数据传输领域服务：完成传输后自动联动成果汇编更新数据完整度。
-支持事务快照回滚和重试机制。"""
+支持事务快照回滚和重试机制；到件文本的登记口径归拢在成果汇编服务，
+联动全部写完才标记幂等，中断时保留 confirm_syncing 供恢复后继续确认。"""
 from __future__ import annotations
 
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.results_compile import ResultsCompileService
 from app.store import store
 
 
@@ -49,27 +51,20 @@ class DataTransferService(BaseModuleService):
             entry["retry_count"] = entry.get("retry_count", 0) + 1
             entry["last_retry_time"] = str(Any)
 
-        store.mark_idempotent(idempotent_key)
-
-        # 传输完成后联动成果汇编更新数据完整度
+        # 传输完成后联动成果汇编登记到件；联动全部写完才标记幂等，
+        # 中断时 confirm_syncing 保持为真，恢复后可用原传输继续确认。
         if action == "确认完成":
-            self._update_results_completeness(entry)
+            entry["confirm_syncing"] = True
+            updated_count = ResultsCompileService().apply_incoming_material(
+                entry.get("数据内容", ""), entry.get("传输时间", ""))
+            entry["confirm_syncing"] = False
+            # 回执只反映本次实际采用的到件所影响的报告数量
+            entry["compile_updates"] = updated_count
+
+        store.mark_idempotent(idempotent_key)
 
         return entry, f"{self.ENTITY}已{action}"
 
-    def _update_results_completeness(self, entry: dict[str, Any]) -> None:
-        """数据传输完成后更新成果汇编中对应的数据完整度。"""
-        data_content = entry.get("数据内容", "")
-        results_rows = store.rows("results_compile")
-        updated_count = 0
-        for row in results_rows:
-            if row.get("status") in ("汇编中", "已提交", "需补充"):
-                current = row.get("数据完整度", "")
-                if data_content not in str(current):
-                    row["数据完整度"] = f"{current} | 已接收：{data_content}"
-                    row["pending"] = True
-                    row["transfer_complete"] = True
-                    row["last_transfer_time"] = entry.get("传输时间", "")
-                    updated_count += 1
-        # 记录传输对成果汇编的影响范围
-        entry["compile_updates"] = updated_count
+    def pending_confirmations(self) -> list[dict[str, Any]]:
+        """值班员恢复查询：到件联动尚未写完、需要继续确认的传输记录。"""
+        return [row for row in store.rows(self.MODULE) if row.get("confirm_syncing")]

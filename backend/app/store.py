@@ -65,6 +65,15 @@ class Store:
             row.update(updates)
             return dict(row)
 
+    def atomic_mutate(self, module: str, entry_id: int, mutate) -> bool:
+        """在行锁内对记录执行条件修改；mutate 返回真值表示实际发生变更。"""
+        lock = self._get_lock(f"{module}:{entry_id}")
+        with lock:
+            row = self.find(module, entry_id)
+            if row is None:
+                return False
+            return bool(mutate(row))
+
     def atomic_append(self, module: str, entry: dict[str, Any]) -> dict[str, Any]:
         """原子追加一条记录。"""
         lock = self._get_lock(f"{module}:append")

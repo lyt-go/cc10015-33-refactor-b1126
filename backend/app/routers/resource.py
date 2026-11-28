@@ -192,6 +192,14 @@ def export_entries(
     )
 
 
+@router.get("/data_transfer/pending-confirmations")
+def transfer_pending_confirmations() -> dict[str, Any]:
+    """值班员恢复查询：哪些传输的到件联动尚未写完、需要继续确认。"""
+    service = require_service("data_transfer")
+    items = service.pending_confirmations()
+    return {"total": len(items), "items": items}
+
+
 @router.get("/{module}/{entry_id}", response_model=dict)
 def get_entry(module: str, entry_id: int) -> dict[str, Any]:
     service = require_service(module)
